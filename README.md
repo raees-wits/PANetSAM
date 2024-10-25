@@ -2,6 +2,7 @@
 
 Leveraging the SAM encoder's feature extraction and the prototypical feature learning to enable corss domain medical image segmentation.
 
+SAM model usage as implemented by segment-anything 
 Prototype design based on:
 - [PANet](https://github.com/kaixin96/PANet)
 
