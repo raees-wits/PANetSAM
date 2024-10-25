@@ -1,6 +1,7 @@
 # PANetSAM
 
-Leveraging the SAM encoder's feature extraction and the prototypical feature learning to enable corss domain medical image segmentation.
+Leveraging the SAM encoder's feature extraction and the prototypical feature learning to enable cross domain medical image segmentation from CT to MRI .
+
 
 SAM model usage as implemented by segment-anything 
 Prototype design based on:
