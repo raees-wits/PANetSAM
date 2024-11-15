@@ -212,7 +212,7 @@ def split_mri_data_by_organ(mri_data: List[Dict],
     Returns:
         Dictionary with splits by organ and sequence type
     """
-    # Initialize data structure
+  
     splits = {
         'liver': {'adapt': [], 'eval': []},
         'kidney_r': {'adapt': [], 'eval': []},
@@ -225,7 +225,7 @@ def split_mri_data_by_organ(mri_data: List[Dict],
     for item in mri_data:
         patient_data[item['patient_id']].append(item)
     
-    # Split patients into adaptation and evaluation sets
+    
     patient_ids = list(patient_data.keys())
     random.shuffle(patient_ids)
     split_idx = int(len(patient_ids) * adaptation_ratio)
@@ -233,7 +233,7 @@ def split_mri_data_by_organ(mri_data: List[Dict],
     adaptation_patients = set(patient_ids[:split_idx])
     evaluation_patients = set(patient_ids[split_idx:])
     
-    # Distribute data by organ while maintaining patient separation
+    
     for patient_id, samples in patient_data.items():
         target_split = 'adapt' if patient_id in adaptation_patients else 'eval'
         
@@ -255,48 +255,147 @@ def split_mri_data_by_organ(mri_data: List[Dict],
 
 def calculate_metrics(pred_masks: torch.Tensor, target_masks: torch.Tensor, threshold: float = 0.5):
     """
-    Calculate Dice and mIoU metrics
+    Calculate comprehensive segmentation metrics
+    
     Args:
         pred_masks: [N, 1, H, W] tensor of predicted probabilities
         target_masks: [N, 1, H, W] tensor of ground truth binary masks
         threshold: float, threshold for converting predictions to binary
+        
     Returns:
-        dict containing dice and miou scores
+        dict containing various evaluation metrics
     """
-    # Ensure same size
+  
     if pred_masks.shape != target_masks.shape:
-        pred_masks = F.interpolate(pred_masks, size=target_masks.shape[-2:], 
+        pred_masks = F.interpolate(pred_masks, size=target_masks.shape[-2:],
                                  mode='bilinear', align_corners=False)
     
-    # Threshold predictions
-    pred_masks = (pred_masks > threshold).float()
+ 
+    pred_masks_binary = (pred_masks > threshold).float()
     
-    # Calculate Dice score
-    dice_score = 2 * (pred_masks * target_masks).sum() / \
-                (pred_masks.sum() + target_masks.sum() + 1e-8)
+
+    metrics_per_image = []
     
-    # Calculate IoU for each image in batch
-    ious = []
+  
     for i in range(pred_masks.shape[0]):
-        pred = pred_masks[i].squeeze()  # [H, W]
+        pred = pred_masks_binary[i].squeeze()  # [H, W]
         target = target_masks[i].squeeze()  # [H, W]
+        pred_prob = pred_masks[i].squeeze()  # Original probabilities
         
         # Calculate intersection and union
         intersection = (pred * target).sum()
-        union = pred.sum() + target.sum() - intersection  # Subtract intersection to avoid counting it twice
+        union = pred.sum() + target.sum() - intersection
         
-        # Calculate IoU
-        iou = (intersection + 1e-8) / (union + 1e-8)
-        ious.append(iou)
+        # True Positives, False Positives, False Negatives
+        tp = intersection
+        fp = pred.sum() - intersection
+        fn = target.sum() - intersection
+        
+        # Calculate metrics
+        image_metrics = {
+            'iou': (intersection + 1e-8) / (union + 1e-8),
+            'dice': (2 * intersection + 1e-8) / (pred.sum() + target.sum() + 1e-8),
+            'precision': (tp + 1e-8) / (tp + fp + 1e-8),
+            'recall': (tp + 1e-8) / (tp + fn + 1e-8),
+        }
+        
+        # Calculate F1 score
+        image_metrics['f1'] = (2 * image_metrics['precision'] * image_metrics['recall']) / \
+                             (image_metrics['precision'] + image_metrics['recall'] + 1e-8)
+        
+        # Calculate accuracy
+        total_pixels = pred.numel()
+        correct_pixels = ((pred == target).sum()).float()
+        image_metrics['accuracy'] = correct_pixels / total_pixels
+        
+        metrics_per_image.append(image_metrics)
     
-    # Calculate mean IoU
-    miou = torch.stack(ious).mean()
+    # Calculate mean metrics across batch
+    mean_metrics = {}
+    for metric in metrics_per_image[0].keys():
+        values = [m[metric] for m in metrics_per_image]
+        mean_metrics[metric] = torch.stack(values).mean().item()
     
-    return {
-        'dice': dice_score.item(),
-        'miou': miou.item()
-    }
+    
+    mean_metrics['miou'] = mean_metrics.pop('iou')
+    
+    return mean_metrics
 
+def log_metrics_to_file(metrics: dict, epoch: int, phase: str, save_dir: str, organ: str = None):
+    """
+    Log metrics to a file
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    filename = os.path.join(save_dir, 'metrics_log.txt')
+    
+    with open(filename, 'a') as f:
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        header = f"\n[{timestamp}] Epoch {epoch} - {phase}"
+        if organ:
+            header += f" - Organ: {organ}"
+        f.write(header + "\n")
+        
+        for metric, value in metrics.items():
+            f.write(f"{metric}: {value:.4f}\n")
+
+
+def plot_metrics_summary(metrics_log: dict, organ: str, support_type: str, save_dir: str):
+    """Plot training and evaluation metrics"""
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    
+    
+    for metric in ['dice', 'miou', 'loss']:
+        if f'adapt_{metric}' in metrics_log:
+            ax1.plot(metrics_log[f'adapt_{metric}'], 
+                    label=metric.upper(), 
+                    marker='o', 
+                    markersize=3)
+    
+    ax1.set_title(f'Adaptation Metrics - {organ}')
+    ax1.set_xlabel('Episode')
+    ax1.set_ylabel('Score')
+    ax1.legend()
+    ax1.grid(True)
+    
+    
+    for metric in ['dice', 'miou']:
+        if f'eval_{metric}' in metrics_log:
+            ax2.plot(metrics_log[f'eval_{metric}'], 
+                    label=metric.upper(), 
+                    marker='o', 
+                    markersize=3)
+    
+    ax2.set_title(f'Evaluation Metrics - {organ}')
+    ax2.set_xlabel('Episode')
+    ax2.set_ylabel('Score')
+    ax2.legend()
+    ax2.grid(True)
+    
+    plt.suptitle(f'{organ} - {support_type} Support')
+    plt.tight_layout()
+    
+    
+    plot_path = os.path.join(save_dir, f'{organ}_{support_type}_metrics.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_metrics(metrics_history: dict, save_dir: str):
+    """
+    Plot metrics history
+    """
+    plt.figure(figsize=(12, 6))
+    for metric, values in metrics_history.items():
+        if metric in ['dice', 'miou', 'accuracy']:  
+            plt.plot(values, label=metric)
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Score')
+    plt.title('Training Metrics')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(save_dir, 'metrics_plot.png'))
+    plt.close()
 
 
 def save_test_prediction(
@@ -304,7 +403,7 @@ def save_test_prediction(
     query_mask: torch.Tensor,
     pred_mask: torch.Tensor,
     save_path: str,
-    identifier: str  # Changed from episode to identifier for more flexibility
+    identifier: str  
 ):
     """
     Save predictions with GT prompt box visualization
@@ -317,11 +416,11 @@ def save_test_prediction(
     """
     plt.figure(figsize=(15, 5))
     
-    # Process query image
+    
     img = query_image.squeeze().cpu().permute(1, 2, 0).numpy()
     h, w = img.shape[:2]
     
-    # Resize masks to match query image size
+    
     query_mask = F.interpolate(
         query_mask.unsqueeze(0),
         size=img.shape[:2],
@@ -334,10 +433,10 @@ def save_test_prediction(
         mode='nearest'
     ).squeeze(0)
     
-    # Get prompt box from GT mask
+   
     prompt_box = get_bbox_from_mask(query_mask)
     
-    # Convert normalized bbox coordinates to pixel coordinates
+    
     box_pixels = [
         int(prompt_box[0] * w),   # x1
         int(prompt_box[1] * h),   # y1
@@ -345,12 +444,12 @@ def save_test_prediction(
         int(prompt_box[3] * h)    # y2
     ]
     
-    # Define colors
-    gt_color = (0.18, 0.8, 0.44)  # Green
-    pred_color = (0.90, 0.30, 0.24)  # Red
-    box_color = 'yellow'  # Prompt box color
     
-    # Create color maps
+    gt_color = (0.18, 0.8, 0.44)  
+    pred_color = (0.90, 0.30, 0.24)  
+    box_color = 'yellow'  
+    
+    
     gt_cmap = plt.cm.colors.LinearSegmentedColormap.from_list(
         'gt',
         [(0, 0, 0, 0), gt_color + (1.0,)]
@@ -360,20 +459,20 @@ def save_test_prediction(
         [(0, 0, 0, 0), pred_color + (1.0,)]
     )
     
-    # Original image
+   
     plt.subplot(131)
     plt.imshow(img)
     plt.title('Query Image', fontsize=12, pad=10)
     plt.axis('off')
     
-    # Ground truth with prompt box
+   
     plt.subplot(132)
     plt.imshow(img)
     plt.imshow(query_mask.squeeze().cpu().numpy(),
               alpha=0.7,
               cmap=gt_cmap)
     
-    # Add prompt box
+    
     rect = plt.Rectangle(
         (box_pixels[0], box_pixels[1]),
         box_pixels[2] - box_pixels[0],
@@ -388,7 +487,7 @@ def save_test_prediction(
     plt.title('Ground Truth + Prompt Box', fontsize=12, pad=10)
     plt.axis('off')
     
-    # Prediction
+   
     plt.subplot(133)
     plt.imshow(img)
     plt.imshow(pred_mask.squeeze().cpu().numpy()> 0.5,
@@ -397,7 +496,7 @@ def save_test_prediction(
     plt.title('Prediction', fontsize=12, pad=10)
     plt.axis('off')
     
-    # Add color reference boxes and labels
+    
     gt_patch = plt.Rectangle((0.92, 0.85), 0.04, 0.04,
                            facecolor=gt_color + (0.7,),
                            transform=plt.gcf().transFigure)
@@ -426,33 +525,33 @@ def save_test_prediction(
     plt.close()
 
 def create_multi_class_cross_domain_episode(
-    support_data: List[Dict],  # CT or MRI data
-    query_data: List[Dict],    # MRI data (multiple organs)
+    support_data: List[Dict],  
+    query_data: List[Dict],   
     k_shot: int,
     n_query: int,
     device: torch.device,
-    is_support_ct: bool = True,  # Flag to indicate if support data is CT
-    target_organ: str = 'liver',  # Specify which organ to focus on
+    is_support_ct: bool = True,  
+    target_organ: str = 'liver',  
     target_size: Tuple[int, int] = (1024, 1024)
 ) -> Dict[str, torch.Tensor]:
     """Create episode with CT/MRI support and multi-class MRI query"""
     
-    # Select random support samples
+    
     support_samples = random.sample(support_data, k_shot) if len(support_data) >= k_shot else random.choices(support_data, k=k_shot)
     
-    # Select random query samples
+    
     query_samples = random.sample(query_data, n_query) if len(query_data) >= n_query else random.choices(query_data, k=n_query)
     
-    # Process support set
+    
     support_images = []
     support_masks = []
     
     for sample in support_samples:
-        # Prepare frame
+        
         frame = sample['frame'].astype(np.float32) / 255.0
         frame = torch.from_numpy(frame).permute(2, 0, 1)  # [3, H, W]
         
-        # Resize image
+        
         frame = F.interpolate(
             frame.unsqueeze(0),
             size=target_size,
@@ -460,13 +559,13 @@ def create_multi_class_cross_domain_episode(
             align_corners=False
         ).squeeze(0)
         
-        # Get appropriate mask
+        
         if is_support_ct:
             mask = sample['mask']
         else:
-            mask = sample['mask']  # Already transformed to single organ mask
+            mask = sample['mask']  
             
-        # Prepare mask
+        
         mask_tensor = torch.from_numpy(mask).float()
         mask_tensor = F.interpolate(
             mask_tensor.unsqueeze(0).unsqueeze(0),
@@ -477,16 +576,16 @@ def create_multi_class_cross_domain_episode(
         support_images.append(frame.unsqueeze(0).to(device))
         support_masks.append(mask_tensor.to(device))
     
-    # Process query set
+    
     query_images = []
     query_masks = []
     
     for sample in query_samples:
-        # Prepare image
+        
         frame = sample['frame'].astype(np.float32) / 255.0
         frame = torch.from_numpy(frame).permute(2, 0, 1)  # [3, H, W]
         
-        # Resize image
+        
         frame = F.interpolate(
             frame.unsqueeze(0),
             size=target_size,
@@ -496,17 +595,17 @@ def create_multi_class_cross_domain_episode(
         
         query_images.append(frame.unsqueeze(0).to(device))
         
-        # Get appropriate mask based on whether it's multi-organ or single organ
-        if 'masks' in sample:  # Multi-organ MRI format
+        
+        if 'masks' in sample:  
             if target_organ in sample['masks']:
                 mask = sample['masks'][target_organ]
             else:
-                # If target organ not present, use zero mask
+                
                 mask = np.zeros_like(sample['masks'][list(sample['masks'].keys())[0]])
-        else:  # Single organ format
+        else:  
             mask = sample['mask']
         
-        # Prepare mask
+        
         mask_tensor = torch.from_numpy(mask).float()
         mask_tensor = F.interpolate(
             mask_tensor.unsqueeze(0).unsqueeze(0),
@@ -515,7 +614,7 @@ def create_multi_class_cross_domain_episode(
         )
         query_masks.append(mask_tensor.to(device))
     
-    # Stack tensors
+    
     support_images = torch.cat(support_images, dim=0).unsqueeze(0)  # [1, S, 3, H, W]
     support_masks = torch.cat(support_masks, dim=0).unsqueeze(0)    # [1, S, 1, H, W]
     query_images = torch.cat(query_images, dim=0)                   # [Q, 3, H, W]
@@ -555,10 +654,10 @@ def visualize_prototypes(
     save_dir: str,
     identifier: str
 ):
-    """Visualize prototype activations and similarities"""
+    
     plt.figure(figsize=(15, 10))
     
-    # Get feature map dimensions
+    
     _, C, H, W = query_features.shape
     n_prototypes = fg_prototypes.shape[0]
     
@@ -568,13 +667,13 @@ def visualize_prototypes(
         fg_proto = fg_prototypes[i].view(-1, 1, 1)  # [C, 1, 1]
         bg_proto = bg_prototypes[i].view(-1, 1, 1)  # [C, 1, 1]
         
-        # Compute similarity for each query feature
+        
         fg_sims = []
         bg_sims = []
         for q in range(query_features.shape[0]):
             q_feat = query_features[q]  # [C, H, W]
             
-            # Compute cosine similarity
+            
             fg_sim = F.cosine_similarity(
                 q_feat.unsqueeze(0),
                 fg_proto.unsqueeze(0),
@@ -590,7 +689,7 @@ def visualize_prototypes(
             fg_sims.append(fg_sim)
             bg_sims.append(bg_sim)
         
-        # Average similarities across query samples
+        
         avg_fg_sim = torch.stack(fg_sims).mean(0)  # [H, W]
         avg_bg_sim = torch.stack(bg_sims).mean(0)  # [H, W]
         
@@ -600,7 +699,7 @@ def visualize_prototypes(
             'diff': (avg_fg_sim - avg_bg_sim).cpu().numpy()
         })
     
-    # Plot similarity maps
+    
     n_cols = 3  # fg, bg, diff
     n_rows = n_prototypes
     
@@ -630,3 +729,8 @@ def visualize_prototypes(
     plt.savefig(f"{save_dir}/prototypes_{identifier}.png", 
                 dpi=300, bbox_inches='tight')
     plt.close()
+
+
+
+
+
