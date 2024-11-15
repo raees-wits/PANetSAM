@@ -161,7 +161,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
     
     # =============Training loop==============================
-    num_epochs = 100
+    num_epochs = 15
     best_val_dice = 0
     metrics_history = {'train': [], 'val': []}
     

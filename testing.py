@@ -11,8 +11,10 @@ import pydicom
 from PIL import Image
 from proto import ProtoNetSAM
 import random
-
+import pandas as pd
 from utils.testutil import *
+
+
 
 
 def test_with_improved_adaptation(
@@ -21,15 +23,14 @@ def test_with_improved_adaptation(
     mri_splits: Dict[str, Dict[str, List[Dict]]],
     device: torch.device,
     save_dir: str,
-    adaptation_episodes: int = 50,
-    evaluation_episodes: int = 20,
+    adaptation_episodes: int = 30,
+    evaluation_episodes: int = 10,
     adaptation_epochs: int = 3,
     k_shot: int = 5,
     support_type: str = 'ct'
 ) -> Dict[str, Dict[str, float]]:
-    """
-    Improved testing with separate adaptation and evaluation phases
-    """
+
+    
     os.makedirs(save_dir, exist_ok=True)
     results = defaultdict(lambda: defaultdict(list))
     
@@ -46,7 +47,7 @@ def test_with_improved_adaptation(
             continue
             
         print(f"\nProcessing {organ}")
-        organ_metrics = defaultdict(list)  # Track metrics for this organ
+        
         
         # Prepare support data
         if support_type == 'ct':
@@ -60,7 +61,7 @@ def test_with_improved_adaptation(
             print(f"Skipping {organ} - no support data")
             continue
             
-        # Create optimizer for adaptation
+      
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, model.parameters()),
             lr=0.0001
@@ -68,6 +69,8 @@ def test_with_improved_adaptation(
         
         organ_save_dir = os.path.join(save_dir, f'{organ}_{support_type}_support')
         os.makedirs(organ_save_dir, exist_ok=True)
+       
+       
         
         # Adaptation phase
         model.train()
@@ -75,7 +78,7 @@ def test_with_improved_adaptation(
             metrics_log = defaultdict(list)
             scaler = torch.cuda.amp.GradScaler()
             
-            for _ in tqdm(range(adaptation_episodes), 
+            for episode in tqdm(range(adaptation_episodes), 
                          desc=f"Adapting {organ} epoch {epoch+1}"):
                 episode_data = create_multi_class_cross_domain_episode(
                     support_data=support_data,
@@ -102,19 +105,19 @@ def test_with_improved_adaptation(
                 scaler.step(optimizer)
                 scaler.update()
                 
-                # Log adaptation metrics
-                metrics = calculate_metrics(
-                    outputs['masks'],
-                    episode_data['query_masks']
-                )
-                metrics_log['loss'].append(loss.item())
-                metrics_log['dice'].append(metrics['dice'])
-                metrics_log['miou'].append(metrics['miou'])
+         
+            metrics = calculate_metrics(outputs['masks'], 
+                                        episode_data['query_masks'])
+           
+            metrics_log['loss'].append(loss.item())
+            metrics_log['dice'].append(metrics['dice'])
+            metrics_log['miou'].append(metrics['miou'])
             
-            # Print epoch metrics
+           
             epoch_metrics = {k: np.mean(v) for k, v in metrics_log.items()}
             print(f"Adaptation Epoch {epoch+1} - ", end='')
             print(", ".join(f"{k}: {v:.4f}" for k, v in epoch_metrics.items()))
+            
         
         # Evaluation phase
         model.eval()
@@ -145,12 +148,14 @@ def test_with_improved_adaptation(
                     episode_data['query_masks']
                 )
                 
-                # Store metrics for this episode
+                
+                
+                
                 for k, v in metrics.items():
                     eval_metrics[k].append(v)
                 
-                # Save visualization for first 5 episodes
-                if episode < 5:
+                
+                if episode > 5:
                     save_test_prediction(
                         episode_data['query_images'][0],
                         episode_data['query_masks'][0],
@@ -159,7 +164,7 @@ def test_with_improved_adaptation(
                         f"ep_{episode}"
                     )
                     
-                    # Visualize prototypes if available
+                    
                     support_features, query_features, fg_protos, bg_protos = \
                         model.get_prototype_features(
                             episode_data['support_images'],
@@ -170,6 +175,7 @@ def test_with_improved_adaptation(
                     prototype_save_dir = os.path.join(organ_save_dir, 'prototypes')
                     os.makedirs(prototype_save_dir, exist_ok=True)
                     
+                    
                     visualize_prototypes(
                         support_features,
                         fg_protos,
@@ -178,24 +184,26 @@ def test_with_improved_adaptation(
                         prototype_save_dir,
                         f"ep_{episode}"
                     )
+            
         
-        # Calculate and store final metrics for this organ
         results[f"{organ}_{support_type}_support"] = {
             k: float(np.mean(v)) for k, v in eval_metrics.items()
         }
+               
         
-        # Print organ results
+     
         print(f"\nResults for {organ} ({support_type} support):")
         for metric, value in results[f"{organ}_{support_type}_support"].items():
             print(f"  {metric}: {value:.4f}")
     
     save_test_summary(results, save_dir)
+
     return results
 
 
 
 def save_test_summary(results: Dict[str, Dict[str, float]], save_dir: str):
-    """Save test results summary"""
+   
     with open(os.path.join(save_dir, 'test_results.txt'), 'w') as f:
         for domain, metrics in results.items():
             f.write(f"\n{domain.upper()} Results:\n")
@@ -206,7 +214,7 @@ def save_test_summary(results: Dict[str, Dict[str, float]], save_dir: str):
 
 
 def load_fresh_model(model_path: str, device: torch.device) -> ProtoNetSAM:
-    """Load a fresh instance of the model"""
+    
     model = ProtoNetSAM(
         checkpoint_path="sam_vit_h_4b8939.pth",
         model_type="vit_h",
@@ -215,24 +223,16 @@ def load_fresh_model(model_path: str, device: torch.device) -> ProtoNetSAM:
     model.load_state_dict(torch.load(model_path))
     return model.to(device)
 
-def load_fresh_model(model_path: str, device: torch.device) -> ProtoNetSAM:
-    """Load a fresh instance of the model"""
-    model = ProtoNetSAM(
-        checkpoint_path="sam_vit_h_4b8939.pth",
-        model_type="vit_h",
-        finetune_mask_decoder=True
-    )
-    model.load_state_dict(torch.load(model_path))
-    return model.to(device)
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_path = "./training_outputs/best_model.pth"
     
-    # Load all available data
+    
     ct_test_data = process_split_data("../Testing_Sets/CT", ["1", "10", "21"])
     
-    # Load all MRI data
+   
     mri_test_data = []
     mri_patient_ids = os.listdir("../Testing_Sets/MR")
     for patient_id in mri_patient_ids:
@@ -240,7 +240,7 @@ def main():
         mri_test_data.extend(load_mri_patient_data(patient_dir, 'T1DUAL'))
         mri_test_data.extend(load_mri_patient_data(patient_dir, 'T2SPIR'))
     
-    # Split MRI data
+    
     mri_splits = split_mri_data_by_organ(mri_test_data)
     
     # Test with CT support
@@ -286,8 +286,7 @@ def main():
     # Clear GPU memory
     del model
     torch.cuda.empty_cache()
-    
-    # Print comparative results
+   
     print("\nComparative Results:")
     for organ in ['liver', 'kidney_r', 'kidney_l', 'spleen']:
         print(f"\n{organ.upper()}:")
@@ -308,7 +307,7 @@ def main():
         else:
             print("  No results available")
     
-    # Save final comparative results
+    
     with open("comparative_results.txt", "w") as f:
         f.write("Comparative Results:\n")
         for organ in ['liver', 'kidney_r', 'kidney_l', 'spleen']:
