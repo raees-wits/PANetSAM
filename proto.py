@@ -314,7 +314,29 @@ class ProtoNetSAM(nn.Module):
         }
         
 
-
+    def get_prototype_features(self, support_images, support_masks, query_images):
+        """Extract and return prototype features for visualization"""
+        # Preprocess images
+        support_images = support_images.view(-1, 3, *support_images.shape[-2:])
+        support_images = self.preprocess_image(support_images)
+        query_images = self.preprocess_image(query_images)
+        
+        # Get image embeddings
+        with torch.no_grad():
+            support_features = self.sam.image_encoder(support_images)
+            query_features = self.sam.image_encoder(query_images)
+        
+        # Apply prototype adaptor
+        support_features = self.prototype_adaptor(support_features)
+        query_features = self.prototype_adaptor(query_features)
+        
+        # Compute prototypes
+        fg_prototypes, bg_prototypes = self.compute_prototypes(
+            support_features.view(1, -1, *support_features.shape[-3:]),
+            support_masks
+        )
+    
+        return support_features, query_features, fg_prototypes, bg_prototypes
     
     def compute_loss(self, outputs, targets):
         """Compute combined loss"""
