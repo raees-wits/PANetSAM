@@ -45,7 +45,7 @@ python3 medsambaseline
 python3 mainSAM.py
 ```
 
-- output images from PANetSAM will be located here:
+- output images from PANetSAM will be located here: [images on drive](https://drive.google.com/file/d/1RhWswtCEaiB58Jp03SKf5HjBATkBKYiw/view?usp=sharing)
 
 Prototype design based on:
 - [PANet](https://github.com/kaixin96/PANet)
