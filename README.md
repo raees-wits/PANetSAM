@@ -9,13 +9,13 @@ SAM model usage as implemented by segment-anything
 - create a conda environment using the `environment.yml` provided in this repo, it should have the necessary packages listed.
 - download the sam model check point from [official sam repo](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints) , choose the vit_h option.
 - download the medsam model checkpoints from the medsam repo `wget https://github.com/ImagingDataCommons/IDC-Tutorials/releases/download/0.2.0/medsam_vit_b.pth`
-- the dataset will be sourced here:
+- the dataset will be sourced here: [drive zip](https://drive.google.com/file/d/1TM29YiGtNjjHHuKzKHBypFaKkJDtpBL0/view?usp=sharing)
 - The project structure is important it should look like this:
 ```
 mkdir project
 cd project
 
-# inside project the datasets must be placed
+# inside project the datasets must be placed - extract the testing and training sets here
 # clone the repo to this project folder
 git clone https://github.com/raees-wits/PANetSAM/
 
